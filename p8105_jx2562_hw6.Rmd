@@ -1,0 +1,174 @@
+---
+title: "p8105_jx2562_hw6"
+author: "Jingyi"
+date: "2023-12-02"
+output: github_document
+---
+
+
+## Problem 1
+
+Load library and dataset
+```{r, message=F}
+library(tidyverse)
+library(broom)
+```
+
+Filter the data:
+
+1.    Create two new variables `city_state` and `solved`.
+
+2.    Ignore some data points with bad quality
+
+3.    Ensure the `victim_age` variable as numeric variable and omit NAs.
+
+```{r, warning = F}
+homicide_df = 
+  read_csv("data/homicide-data.csv", na = c("", "NA", "Unknown")) |> 
+  mutate(
+    city_state = str_c(city, state, sep = ", "),
+    victim_age = as.numeric(victim_age),
+    resolution = case_when(
+      disposition == "Closed without arrest" ~ 0,
+      disposition == "Open/No arrest"        ~ 0,
+      disposition == "Closed by arrest"      ~ 1)
+  ) |> 
+  filter(victim_race %in% c("White", "Black")) |> 
+  filter(!(city_state %in% c("Tulsa, AL", "Dallas, TX", "Phoenix, AZ", "Kansas City, MO"))) |> 
+  select(city_state, resolution, victim_age, victim_sex, victim_race)
+```
+
+Apply a function to fit logistic regression and extract OR and CI for Baltimore, MD
+```{r}
+baltimore_glm = 
+  filter(homicide_df, city_state == "Baltimore, MD") |> 
+  glm(resolution ~ victim_age + victim_sex + victim_race, family = binomial(), data = _)
+
+baltimore_glm |> 
+  broom::tidy() |> 
+  mutate(
+    OR = exp(estimate), 
+    OR_CI_upper = exp(estimate + 1.96 * std.error),
+    OR_CI_lower = exp(estimate - 1.96 * std.error)) |> 
+  filter(term == "victim_sexMale") |> 
+  select(OR, OR_CI_lower, OR_CI_upper) |>
+  knitr::kable(digits = 3)
+```
+
+Apply the function to other city
+```{r, warning=F}
+model_results = 
+  homicide_df |> 
+  nest(data = -city_state) |> 
+  mutate(
+    models = map(data, \(df) glm(resolution ~ victim_age + victim_sex + victim_race, 
+                             family = binomial(), data = df)),
+    tidy_models = map(models, broom::tidy)) |> 
+  select(-models, -data) |> 
+  unnest(cols = tidy_models) |> 
+  mutate(
+    OR = exp(estimate), 
+    OR_CI_upper = exp(estimate + 1.96 * std.error),
+    OR_CI_lower = exp(estimate - 1.96 * std.error)) |> 
+  filter(term == "victim_sexMale") |> 
+  select(city_state, OR, OR_CI_lower, OR_CI_upper)
+
+model_results |>
+  slice(1:5) |> 
+  knitr::kable(digits = 3)
+```
+
+Make the plot
+
+Below we generate a plot of the estimated ORs and CIs for each city, ordered by magnitude of the OR from smallest to largest. From this plot we see that most cities have odds ratios that are smaller than 1, suggesting that crimes with male victims have smaller odds of resolution compared to crimes with female victims after adjusting for victim age and race. This disparity is strongest in New yrok. In roughly half of these cities, confidence intervals are narrow and do not contain 1, suggesting a significant difference in resolution rates by sex after adjustment for victim age and race. 
+```{r}
+model_results |> 
+  mutate(city_state = fct_reorder(city_state, OR)) |> 
+  ggplot(aes(x = city_state, y = OR)) + 
+  geom_point() + 
+  geom_errorbar(aes(ymin = OR_CI_lower, ymax = OR_CI_upper)) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+## Problem 2
+
+```{r}
+library(rnoaa)
+library(boot)
+```
+
+Extract weather data
+
+```{r}
+weather_df <- 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2022-01-01",
+    date_max = "2022-12-31") |>
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) |>
+  select(name, id, everything())
+```
+
+Define the regression function
+```{r}
+regression_function <- function(data, indices) {
+  sampled_data <- data[indices, ]
+  fit <- lm(tmax ~ tmin + prcp, data = sampled_data)
+  rsquared <- broom::glance(fit)$r.squared
+  log_beta_product <- log(broom::tidy(fit)$estimate[2] * broom::tidy(fit)$estimate[3])
+  c(rsquared, log_beta_product)
+}
+```
+
+Perform bootstrap
+```{r, warning=F}
+set.seed(123)
+
+bootstrap_results <- boot(data = weather_df, statistic = regression_function, R = 5000)
+```
+
+A lot of NAs occurs in this process, which is produced by a negative value in the estimate of either beta1 or beta2. When computing log transformation, the negative value will result in a NA. 
+
+Result interpretation by plotting the distribution of R-square and log(beta1 * beta2).
+```{r}
+par(mfrow = c(1, 2))
+hist(bootstrap_results$t[, 1], main = "Distribution of R-squared", xlab = "R-squared")
+hist(bootstrap_results$t[, 2], main = "Distribution of log(beta1 * beta2)", xlab = "log(beta1 * beta2)")
+```
+As we can see from the plot, the R-squared value mainly condensed around 0.92. A R-square value larger than 0.9 usually implies a good estimation of the data. For log(beta1 * beta2), all values are distributed negatively, which presents that beta1*beta2 < 1.
+
+Compute 95% confidence interval and Print the confidence intervals
+```{r}
+quantiles_rsquare <- quantile(bootstrap_results$t[, 1], c(0.025, 0.975), dimnames = FALSE, na.rm = T)
+quantiles_log_beta_product <- quantile(bootstrap_results$t[, 2], c(0.025, 0.975), dimnames = FALSE, na.rm = T)
+ci_rsquared <- quantiles_rsquare
+ci_log_beta_product <- quantiles_log_beta_product
+cat("95% Confidence Interval for R-squared:", ci_rsquared, "\n")
+cat("95% Confidence Interval for log(beta1 * beta2):", ci_log_beta_product, "\n")
+```
+
+In conclusion, this code defines a regression function and then uses the boot function to perform the bootstrap procedure. It calculates the R-squared and log of the product of the estimated coefficients for each bootstrap sample. The resulting distributions are plotted, and 95% confidence intervals are computed for both quantities of interest.
+
+
+## Problem 3
+
+```{r}
+birthweight_data <- read_csv("data/birthweight.csv") |>
+  mutate(
+    babysex = factor(babysex, levels = c(1, 2), labels = c("male", "female")),
+    frace = factor(frace, levels = c(1, 2, 3, 4, 8, 9), labels = c("White", "Black", "Asian", "Puerto Rican", "Other", "Unknown")),
+    mrace = factor(mrace, levels = c(1, 2, 3, 4, 8), labels = c("White", "Black", "Asian", "Puerto Rican", "Other")),
+    malform = factor(malform),
+    smoken = factor(smoken),
+    parity = factor(parity),
+    pnumlbw = factor(pnumlbw),
+    pnumsga = factor(pnumsga)
+  )
+
+```
+
