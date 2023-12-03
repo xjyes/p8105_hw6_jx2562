@@ -157,7 +157,7 @@ In conclusion, this code defines a regression function and then uses the boot fu
 
 ## Problem 3
 
-```{r}
+```{r, message=FALSE}
 library(modelr)
 library(mgcv)
 ```
@@ -290,3 +290,17 @@ cat("The CV result for model2:",mean_model2,"\n")
 ```
 
 From the results, we can see our initial model has the best performance in RMSE derived from 10-fold CV. 
+
+Visualization are given below.
+```{r}
+cv_df |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
