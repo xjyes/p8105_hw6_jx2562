@@ -158,6 +158,12 @@ In conclusion, this code defines a regression function and then uses the boot fu
 ## Problem 3
 
 ```{r}
+library(modelr)
+library(mgcv)
+```
+
+Load data and convert to some variables to factors
+```{r}
 birthweight_data <- read_csv("data/birthweight.csv") |>
   mutate(
     babysex = factor(babysex, levels = c(1, 2), labels = c("male", "female")),
@@ -169,6 +175,118 @@ birthweight_data <- read_csv("data/birthweight.csv") |>
     pnumlbw = factor(pnumlbw),
     pnumsga = factor(pnumsga)
   )
-
 ```
 
+Check for missing data
+
+```{r}
+summary(is.na(birthweight_data))
+summary(birthweight_data)
+```
+From the result we can see there's no missing data. We continue our model building process.
+
+We construct a MLR model in spite of the variables with only one level, which are `pnumlbw` and `pnumsga`.
+```{r}
+# Model Building
+birthweight_model <- lm(bwt ~ babysex + bhead + blength + delwt + fincome + frace + gaweeks +
+                          malform + menarche + mheight + momage + mrace + parity + ppbmi + ppwt + smoken + wtgain, data = birthweight_data)
+
+# Summary of the model
+summary(birthweight_model)
+
+```
+Interpretation of the result:
+
+1.    *Coefficients:* here I only interpret some of the coefficients.
+
+`   Intercept: The intercept is -6,362, which represents the estimated birth weight when all predictor variables are zero.
+
+`   fincome: The coefficient is 0.2973, suggesting a small positive effect of family monthly income on birth weight, but it's not statistically significant (p-value = 0.099).
+
+`   malform1: The presence of malformations (malform1) is associated with a decrease in birth weight by 7.87 grams, but it's not statistically significant.
+
+`   smoken variables: These represent different levels of smoking during pregnancy. Some of them are highly associated with the outcome, like smoken4, 10, 20, 30.
+
+2.    *Residuals:*
+
+`   The minimum residual is -1101.98, and the maximum is 2338.37. Residuals are the differences between observed and predicted values. These values suggest that the model has some variability in predicting birth weights.
+
+3.    *Multiple R-squared and Adjusted R-squared:*
+
+`   Multiple R-squared is 0.721, indicating that approximately 72.1% of the variance in birth weight is explained by the model.
+
+`   Adjusted R-squared (adjusted for the number of predictors) is 0.7175, which is acceptable for a prediction model.
+
+4.    *F-statistic:*
+
+`   The F-statistic is 205.2, with a very low p-value (< 2.2e-16), indicating that the model is statistically significant.
+
+In summary, this model appears to be statistically significant and explains a substantial portion of the variance in birth weight. However, we should consider addressing collinearity issues and further examining the practical significance of the coefficients.
+
+```{r}
+birthweight_plot <- birthweight_model %>%
+  augment() %>%
+  ggplot(aes(.fitted, .resid)) +
+  geom_point() +
+  geom_smooth(se = FALSE, method = "loess", color = "red") +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Residuals")
+
+birthweight_plot
+```
+This plot implies that once the fitted value is over 2000, the value of residuals stops decreasing significantly and approaches 0. This can give us the hint of maintaining a high quality of model as well as consuming a shorter time.
+
+Now, we compare this model to another 2 models by cross validation.
+
+Model 1: Using Length at Birth and Gestational Age as Predictors (Main Effects Only)
+
+```{r}
+model1 <- lm(bwt ~ blength + gaweeks, data = birthweight_data)
+summary(model1)
+```
+
+Model 2: 
+
+```{r}
+model2 <- lm(bwt ~ bhead * blength * babysex, data = birthweight_data)
+summary(model2)
+```
+
+Comparison by cross validation
+
+```{r}
+cv_df = crossv_mc(birthweight_data, 10)|>
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+
+cv_df = 
+  cv_df |> 
+  mutate(
+    birthweight_model  = map(train, \(birthweight_data) birthweight_model),
+    model1  = map(train, \(birthweight_data) model1),
+    model2  = map(train, \(birthweight_data) model2)) |> 
+  mutate(
+    rmse_birthweight_model = map2_dbl(birthweight_model, test, \(mod, birthweight_data) rmse(model = mod, data = birthweight_data)),
+    rmse_model1 = map2_dbl(model1, test, \(mod, birthweight_data) rmse(model = mod, data = birthweight_data)),
+    rmse_model2 = map2_dbl(model2, test, \(mod, birthweight_data) rmse(model = mod, data = birthweight_data)))
+```
+
+Make the comparison calculating the mean of the three models' rmse from cross validation.
+```{r}
+mean_birthweight_model = cv_df |>
+  pull(rmse_birthweight_model) |>
+  mean()
+cat("The CV result for birthwight_model:",mean_birthweight_model,"\n")
+
+mean_model1 = cv_df |>
+  pull(rmse_model1) |>
+  mean()
+cat("The CV result for model1:",mean_model1,"\n")
+
+mean_model2 = cv_df |>
+  pull(rmse_model2) |>
+  mean()
+cat("The CV result for model2:",mean_model2,"\n")
+```
+
+From the results, we can see our initial model has the best performance in RMSE derived from 10-fold CV. 
